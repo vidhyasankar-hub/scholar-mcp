@@ -173,6 +173,56 @@ def search_web_of_science(query: str, limit: int = 10,
         return _err("Web of Science", e)
 
 
+# ------------------------------------------------------------------ Scopus
+@mcp.tool
+def search_scopus(query: str, limit: int = 10, year_from: int | None = None,
+                  year_to: int | None = None, sort_by_citations: bool = False,
+                  field: str = "TITLE-ABS-KEY") -> dict | str:
+    """Search Scopus (Elsevier Scopus Search API).
+    field: TITLE-ABS-KEY (default), TITLE, AUTH, DOI, AFFIL, SRCTITLE.
+    Advanced: pass a full Scopus query in `query` and set field=''
+    (e.g. 'TITLE-ABS-KEY(DFT) AND SRCTITLE(Journal of Molecular Structure)')."""
+    key = os.getenv("SCOPUS_API_KEY")
+    if not key:
+        return ("SCOPUS_API_KEY not set. Free key at dev.elsevier.com "
+                "(results depend on your institution's Scopus subscription).")
+    q = f"{field}({query})" if field else query
+    if year_from:
+        q += f" AND PUBYEAR > {year_from - 1}"
+    if year_to:
+        q += f" AND PUBYEAR < {year_to + 1}"
+    headers = {"X-ELS-APIKey": key, "Accept": "application/json"}
+    if os.getenv("SCOPUS_INST_TOKEN"):
+        headers["X-ELS-Insttoken"] = os.getenv("SCOPUS_INST_TOKEN")
+    params = {"query": q, "count": _clip(limit), "start": 0}
+    if sort_by_citations:
+        params["sort"] = "-citedby-count"
+    try:
+        data = _get("https://api.elsevier.com/content/search/scopus",
+                    params, headers).json()
+        sr = data.get("search-results") or {}
+        out = []
+        for e in sr.get("entry", []):
+            if "error" in e:          # Scopus returns this when no results
+                break
+            link = next((l.get("@href") for l in e.get("link", [])
+                         if l.get("@ref") == "scopus"), None)
+            cites = e.get("citedby-count")
+            out.append({
+                "title": e.get("dc:title"),
+                "year": (e.get("prism:coverDate") or "")[:4] or None,
+                "first_author": e.get("dc:creator"),
+                "journal": e.get("prism:publicationName"),
+                "doi": e.get("prism:doi"),
+                "cited_by": int(cites) if cites and str(cites).isdigit() else None,
+                "scopus_eid": e.get("eid"),
+                "link": link,
+            })
+        return {"total": sr.get("opensearch:totalResults"), "results": out}
+    except Exception as e:
+        return _err("Scopus", e)
+
+
 # ---------------------------------------------------------- Google Scholar
 @mcp.tool
 def search_google_scholar(query: str, limit: int = 10,
